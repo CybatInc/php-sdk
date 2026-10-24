@@ -37,6 +37,8 @@ final class Options
     public readonly mixed $bodyStatusFilter;
     /** Timeout in seconds for the ingest HTTP call. Kept short since (outside a terminate/kernel.terminate hook) this delays the response. */
     public readonly int $timeoutSeconds;
+    /** @var array<string> normalized (lowercased) extra sensitive field names */
+    public readonly array $extraSensitiveKeys;
 
     /**
      * @param string $apiKey Raw key from the Intelligence Dashboard -> API Keys. Required.
@@ -44,9 +46,7 @@ final class Options
      *     enforced against). Exactly one of gcpProjectId/awsProjectId is required -- it says which
      *     cloud this app's traffic belongs to (mutually exclusive: one Collector targets one cloud)
      *     and determines routing. On GCP it also enables automatic blocking (VPC Firewall / Cloud
-     *     Armor) -- without a real project granted the right IAM roles, Cybat still detects and
-     *     alerts on threats, it just never touches infrastructure. Grant
-     *     soc-ai-agent@cybat-public.iam.gserviceaccount.com compute.securityAdmin +
+     *     Armor) -- Grant the Cybat service account (shown in onboarding) compute.securityAdmin +
      *     compute.networkViewer on this project for enforcement to work.
      * @param string|null $awsProjectId Routes data to the AWS ingestion endpoint instead of GCP's.
      *     Required (instead of gcpProjectId) for an AWS-hosted app. NOT YET LIVE --
@@ -70,6 +70,13 @@ final class Options
      * @param callable|null $bodyStatusFilter `callable(int $status): bool`. Capture bodies only for
      *     responses matching this filter (independent of statusFilter). Default StatusFilter::all().
      * @param int $timeoutSeconds Timeout for the ingest HTTP call itself. Default 5.
+     * @param array<string>|null $extraSensitiveKeys Extra field names to treat as secrets on top of
+     *     the built-in list (password, token, secret, cvv, ssn, iban, ...) -- e.g. domain-specific
+     *     identifiers like "account_number" or "medical_record_number" that wouldn't otherwise
+     *     match. Matched as an exact, case-insensitive field name (not a regex fragment), so adding
+     *     a short name like "id" can't accidentally swallow unrelated keys. Only affects
+     *     captureBody's redaction of the request body -- it does not extend which query-string
+     *     parameter names get redacted in the url. Default: none.
      */
     public function __construct(
         string $apiKey,
@@ -84,6 +91,7 @@ final class Options
         int $bodyMaxBytes = self::BODY_DEFAULT_BYTES,
         ?callable $bodyStatusFilter = null,
         int $timeoutSeconds = 5,
+        ?array $extraSensitiveKeys = null,
     ) {
         if ($apiKey === '') {
             throw new \InvalidArgumentException('cybat: apiKey is required');
@@ -115,6 +123,7 @@ final class Options
         $this->bodyMaxBytes = min(self::BODY_HARD_MAX_BYTES, max(256, $bodyMaxBytes));
         $this->bodyStatusFilter = $bodyStatusFilter ?? StatusFilter::all();
         $this->timeoutSeconds = $timeoutSeconds;
+        $this->extraSensitiveKeys = array_map('strtolower', $extraSensitiveKeys ?? []);
     }
 
     public function projectId(): ?string

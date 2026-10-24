@@ -159,6 +159,58 @@ final class RedactTest extends TestCase
         $this->assertSame(json_encode($once), json_encode($twice));
     }
 
+    public function testCustomerSuppliedKeyNameIsRedactedInMaskValue(): void
+    {
+        $v = json_decode('{"account_number":"9988776655","note":"hi"}', true);
+        $out = Redact::maskValue($v, 0, ['account_number']);
+        $this->assertStringStartsWith('[REDACTED len=', $out['account_number']);
+        $this->assertSame('hi', $out['note']);
+    }
+
+    public function testWithoutExtraSensitiveKeysTheSameFieldIsLeftAlone(): void
+    {
+        $v = json_decode('{"account_number":"9988776655"}', true);
+        $out = Redact::maskValue($v);
+        $this->assertSame('9988776655', $out['account_number']);
+    }
+
+    public function testExtraSensitiveKeysMatchCaseInsensitively(): void
+    {
+        $v = json_decode('{"Account_Number":"9988776655"}', true);
+        $out = Redact::maskValue($v, 0, ['account_number']);
+        $this->assertStringStartsWith('[REDACTED len=', $out['Account_Number']);
+    }
+
+    public function testExtraSensitiveKeysDoNotWidenToSubstringMatches(): void
+    {
+        // "id" is deliberately short -- must only catch an exact key named "id",
+        // never swallow unrelated keys that merely contain "id" as a substring.
+        $v = json_decode('{"id":"secret-ish","residential_address":"123 Main St"}', true);
+        $out = Redact::maskValue($v, 0, ['id']);
+        $this->assertStringStartsWith('[REDACTED len=', $out['id']);
+        $this->assertSame('123 Main St', $out['residential_address']);
+    }
+
+    public function testExtraSensitiveKeysExtendRatherThanReplaceTheBuiltInList(): void
+    {
+        $v = json_decode('{"password":"hunter2","account_number":"9988776655"}', true);
+        $out = Redact::maskValue($v, 0, ['account_number']);
+        $this->assertStringStartsWith('[REDACTED len=', $out['password']);
+        $this->assertStringStartsWith('[REDACTED len=', $out['account_number']);
+    }
+
+    public function testExtraSensitiveKeysApplyInMaskBodyForJsonText(): void
+    {
+        $out = Redact::maskBody('{"account_number":"9988776655","ok":1}', ['account_number']);
+        $this->assertStringNotContainsString('9988776655', $out);
+    }
+
+    public function testExtraSensitiveKeysApplyInMaskStringJsonPairPass(): void
+    {
+        $out = Redact::maskString('{"account_number":"9988776655"}', ['account_number']);
+        $this->assertStringNotContainsString('9988776655', $out);
+    }
+
     public function testRedactedShapeNeverContainsOriginalCharacters(): void
     {
         $out = Redact::redactedShape('SuperSecret123');

@@ -138,8 +138,19 @@ final class Redact
     // overall MAX_INPUT_BYTES cap still apply).
     private const JSON_PAIR_RE = '/"([^"\\\\]{1,64})"(\s*:\s*)(?:"((?:[^"\\\\]|\\\\.){0,1000})"|(-?\d{1,25}))/';
 
-    /** Redacts secrets and personal data inside free text. Idempotent. */
-    public static function maskString(?string $input): ?string
+    /**
+     * Redacts secrets and personal data inside free text. Idempotent.
+     *
+     * $extraSensitiveKeys extends which JSON object keys are treated as
+     * secrets (exact, case-insensitive match) on top of the built-in list --
+     * see Options's $extraSensitiveKeys constructor parameter for where a
+     * customer sets this. Only affects the embedded-JSON pass; the
+     * fixed-name checks elsewhere in this method (query-string param names,
+     * provider key patterns, etc.) are unaffected.
+     *
+     * @param array<string> $extraSensitiveKeys
+     */
+    public static function maskString(?string $input, array $extraSensitiveKeys = []): ?string
     {
         if ($input === null || $input === '') {
             return $input;
@@ -167,12 +178,12 @@ final class Redact
             return $prefix . self::redactedShape(self::safeDecode($value));
         }, $s);
 
-        $s = preg_replace_callback(self::JSON_PAIR_RE, static function (array $m): string {
+        $s = preg_replace_callback(self::JSON_PAIR_RE, static function (array $m) use ($extraSensitiveKeys): string {
             $key = $m[1];
             $colon = $m[2];
             $str = $m[3] ?? '';
             $num = $m[4] ?? '';
-            if (preg_match(self::SENSITIVE_KEY_RE, $key) !== 1) {
+            if (!self::isSensitiveKey($key, $extraSensitiveKeys)) {
                 return $m[0];
             }
             $raw = $str !== '' ? $str : $num;
@@ -212,6 +223,22 @@ final class Redact
         '/(pass|pwd|secret|token|auth|cookie|session|credential|private|api[_-]?key|apikey|card|cvv|cvc|ssn|iban|\bpin\b)/i';
     private const CARD_KEY_RE = '/(card|cc[_-]?num|ccnum|pan)/i';
 
+    /**
+     * $extraSensitiveKeys is matched as an exact, case-insensitive field
+     * name, not a regex fragment -- a customer adding a short name like "id"
+     * can't accidentally turn into a substring match against unrelated keys
+     * the way SENSITIVE_KEY_RE's fragments deliberately can.
+     *
+     * @param array<string> $extraSensitiveKeys
+     */
+    private static function isSensitiveKey(string $key, array $extraSensitiveKeys): bool
+    {
+        if (preg_match(self::SENSITIVE_KEY_RE, $key) === 1) {
+            return true;
+        }
+        return $extraSensitiveKeys !== [] && in_array(strtolower($key), $extraSensitiveKeys, true);
+    }
+
     private const MAX_DEPTH = 6;
     private const MAX_ITEMS = 50;
 
@@ -222,16 +249,21 @@ final class Redact
      * string goes through maskString. Depth and width are bounded so a
      * hostile payload can't make this expensive.
      *
+     * $extraSensitiveKeys extends which array keys count as sensitive (exact,
+     * case-insensitive match) on top of the built-in name/fragment list --
+     * see Options's $extraSensitiveKeys constructor parameter.
+     *
      * @param mixed $value
+     * @param array<string> $extraSensitiveKeys
      * @return mixed
      */
-    public static function maskValue(mixed $value, int $depth = 0): mixed
+    public static function maskValue(mixed $value, int $depth = 0, array $extraSensitiveKeys = []): mixed
     {
         if ($value === null) {
             return null;
         }
         if (is_string($value)) {
-            return self::maskString($value);
+            return self::maskString($value, $extraSensitiveKeys);
         }
         if (is_bool($value) || is_int($value) || is_float($value)) {
             return $value;
@@ -246,7 +278,7 @@ final class Redact
                 $limit = min($count, self::MAX_ITEMS);
                 $out = [];
                 for ($i = 0; $i < $limit; $i++) {
-                    $out[] = self::maskValue($value[$i], $depth + 1);
+                    $out[] = self::maskValue($value[$i], $depth + 1, $extraSensitiveKeys);
                 }
                 if ($count > self::MAX_ITEMS) {
                     $out[] = '…[' . ($count - self::MAX_ITEMS) . ' more items]';
@@ -262,7 +294,7 @@ final class Redact
                 }
                 $count++;
                 $key = (string) $k;
-                if (preg_match(self::SENSITIVE_KEY_RE, $key) === 1 && (is_string($v) || is_int($v) || is_float($v))) {
+                if (self::isSensitiveKey($key, $extraSensitiveKeys) && (is_string($v) || is_int($v) || is_float($v))) {
                     $raw = is_string($v) ? $v : (string) $v;
                     if (str_starts_with($raw, self::REDACTED) || str_starts_with($raw, 'XXXX-XXXX-XXXX-')) {
                         $out[$key] = $raw;
@@ -273,7 +305,7 @@ final class Redact
                         ? self::maskCard($digits)
                         : self::redactedShape($raw);
                 } else {
-                    $out[$key] = self::maskValue($v, $depth + 1);
+                    $out[$key] = self::maskValue($v, $depth + 1, $extraSensitiveKeys);
                 }
             }
             if (count($value) > self::MAX_ITEMS) {
@@ -297,22 +329,28 @@ final class Redact
      * plain/truncated text. Shared by the SDK (client side, before anything
      * is sent) and the server (second pass), so both apply the same rules.
      *
+     * $extraSensitiveKeys extends which field names are treated as secrets
+     * on top of the built-in list -- see Options's $extraSensitiveKeys
+     * constructor parameter, which is the actual customer-facing knob for
+     * this.
+     *
      * @param mixed $body
+     * @param array<string> $extraSensitiveKeys
      * @return mixed
      */
-    public static function maskBody(mixed $body): mixed
+    public static function maskBody(mixed $body, array $extraSensitiveKeys = []): mixed
     {
         if ($body === null) {
             return null;
         }
         if (!is_string($body)) {
-            return self::maskValue($body, 0);
+            return self::maskValue($body, 0, $extraSensitiveKeys);
         }
         $trimmed = trim($body);
         if (str_starts_with($trimmed, '{') || str_starts_with($trimmed, '[')) {
             $parsed = json_decode($trimmed, true);
             if (json_last_error() === JSON_ERROR_NONE) {
-                $masked = self::maskValue($parsed, 0);
+                $masked = self::maskValue($parsed, 0, $extraSensitiveKeys);
                 $encoded = json_encode($masked);
                 if ($encoded !== false) {
                     return $encoded;
@@ -320,7 +358,7 @@ final class Redact
             }
             // truncated JSON -- text pass below
         }
-        return self::maskString($body);
+        return self::maskString($body, $extraSensitiveKeys);
     }
 
     // -- Truncation (Layer 2) --------------------------------------------------

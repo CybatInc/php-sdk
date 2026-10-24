@@ -1,6 +1,6 @@
 # cybat-sdk (PHP)
 
-A PSR-15 middleware for the Cybat Intelligence Engine — captures HTTP traffic your server already receives and reports it directly to Cybat, no GCP org-level log sink required. Works with any PSR-15-compatible framework (Slim 4, Mezzio, and others).
+A PSR-15 middleware for the Cybat Intelligence Engine — captures HTTP traffic your server already receives and reports it directly to Cybat. Works with any PSR-15-compatible framework (Slim 4, Mezzio, and others).
 
 ## ⚠️ Read this before you install: how this SDK differs from the others
 
@@ -93,7 +93,7 @@ Cybat classifies and alerts on threats as soon as `gcpProjectId` is set. But **a
 
 To enable blocking:
 1. Set `gcpProjectId` to the GCP project your app's infrastructure lives in (already required above).
-2. Grant `soc-ai-agent@cybat-public.iam.gserviceaccount.com` the `roles/compute.securityAdmin` and `roles/compute.networkViewer` roles on that project (a Cloud Shell command for this is shown in the Intelligence Dashboard onboarding flow).
+2. Grant the Cybat service account (shown in the Intelligence Dashboard onboarding flow) the `roles/compute.securityAdmin` and `roles/compute.networkViewer` roles on that project.
 
 ## ⚠️ Behind a load balancer or reverse proxy?
 
@@ -115,6 +115,7 @@ new Options(
     bodyMaxBytes: int,              // default 2048, max 8192 -- cap on the body excerpt after redaction
     bodyStatusFilter: ?callable,    // capture bodies only for matching responses
     timeoutSeconds: int,            // default 5 -- timeout for the ingest HTTP call itself
+    extraSensitiveKeys: ?array,     // e.g. ["account_number", "medical_record_number"] -- see "Request bodies & privacy"
 );
 ```
 
@@ -130,6 +131,19 @@ A status filter is any `callable(int $status): bool`:
 `captureBody` is off by default. `CybatMiddleware` reads the request body via PSR-7's `(string) $request->getBody()` and, if the stream is seekable, rewinds it afterward so the downstream handler still sees a fresh, readable stream — this is simpler than the Go/Java SDKs' manual stream-teeing, since PSR-7 message bodies are meant to be re-readable, unlike a raw one-shot stream.
 
 Redaction is **not optional** once `captureBody` is on: before an event is even sent, the body is masked in-process — emails, card numbers (Luhn-checked), JWT/Bearer tokens, provider API keys, and the value of any field named like a secret (`password`, `token`, `cvv`, `ssn`, …). A masked secret is replaced by a content-free shape such as `[REDACTED len=13 sus=quote,comment]` — its length and what kind of attack characters it contained, so a SQL injection typed into a password box is still visible, but the value is not. JSON, form-encoded and text bodies only; multipart and binary are skipped.
+
+The built-in list can't know that a field called `account_number` or `medical_record_number` happens to contain something private in your app — `extraSensitiveKeys` lets you extend it with your own:
+
+```php
+new Options(
+    apiKey: getenv('CYBAT_API_KEY'),
+    gcpProjectId: 'my-gcp-project',
+    captureBody: true,
+    extraSensitiveKeys: ['account_number', 'medical_record_number', 'internal_employee_id'],
+);
+```
+
+Matching is an exact, case-insensitive field name, not a regex fragment or substring — adding a short name like `id` only catches a field literally named `id`, it can't accidentally swallow unrelated keys the way the built-in fragment-based patterns (`pass`, `token`, `key`…) deliberately do. Values under these keys get the same content-free `[REDACTED len=N sus=…]` treatment as the built-in list, applied wherever `captureBody` already looks (JSON, form-encoded and text bodies) — it does not extend which query-string parameter names get redacted in the URL. If a route handles data you don't want to leave your infrastructure at all regardless of field name, leave `captureBody` off, or use `bodyStatusFilter` / a `statusFilter` callable to exclude it.
 
 ## Behavior
 

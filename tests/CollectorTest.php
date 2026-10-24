@@ -208,4 +208,18 @@ final class CollectorTest extends TestCase
         $this->assertLessThanOrEqual(300, strlen($out['body']));
         $this->assertStringContainsString('UNION SELECT', $out['body']);
     }
+
+    public function testCaptureBodyForRedactsExtraSensitiveKeys(): void
+    {
+        $c = self::bodyCollector(['captureBody' => true, 'extraSensitiveKeys' => ['account_number']]);
+        $out = $c->captureBodyFor('{"account_number":"9988776655","note":"hi"}', 'application/json', 200);
+        $this->assertStringNotContainsString('9988776655', $out['body']);
+    }
+
+    public function testCaptureBodyForWithoutExtraSensitiveKeysLeavesFieldUntouched(): void
+    {
+        $c = self::bodyCollector(['captureBody' => true]);
+        $out = $c->captureBodyFor('{"account_number":"9988776655"}', 'application/json', 200);
+        $this->assertStringContainsString('9988776655', $out['body']);
+    }
 }

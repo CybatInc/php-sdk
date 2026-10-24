@@ -81,7 +81,7 @@ final class Collector
         }
 
         try {
-            $masked = Redact::maskBody($rawBody);
+            $masked = Redact::maskBody($rawBody, $this->opts->extraSensitiveKeys);
             $text = is_string($masked) ? $masked : json_encode($masked);
             if ($text === false) {
                 return null;
