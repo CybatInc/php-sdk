@@ -17,8 +17,6 @@ That has one real consequence: calling `record()` blocks for the duration of the
 composer require cybat/sdk
 ```
 
-(Not yet published to Packagist — see "Publishing" below.)
-
 ## Usage
 
 **PSR-15** (Slim 4, Mezzio, etc.):
@@ -169,4 +167,4 @@ composer install
 
 ## Publishing (maintainers)
 
-Not yet published to Packagist. `.github/workflows/test-php.yml` runs `phpunit` on every push/PR touching `php/`; there is no publish job yet — publishing to Packagist just requires registering the GitHub repo there and enabling its auto-update webhook, no build/signing step like PyPI or Maven Central.
+Published to Packagist as [`cybat/sdk`](https://packagist.org/packages/cybat/sdk). Releases and updates are pushed to the public mirror repo (`CybatInc/php-sdk`), which triggers the Packagist auto-update webhook.
